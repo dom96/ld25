@@ -50,7 +50,7 @@ type
                       # Yeah, I know, beginning of clusterfuck right?
 
   TLevel = object
-    tiles: seq[seq[TTiles]] # 2d array of tiles.
+    tiles: seq[seq[TTiles]] # 2d array of tiles. y[x]
 
 const
   ScreenW = 800
@@ -153,6 +153,9 @@ proc update(player: var TVillain) =
 proc floatRect2(x, y, w, h: float): TFloatRect {.inline.} =
   return floatRect(x, y, w*2, h*2)
 
+proc getLevelWidth(level: TLevel): int {.inline.} =
+  return level.tiles[0].len()*128
+
 proc getBoundBox(player: TVillain): seq[TFloatRect] =
   result = @[]
   let pos = player.sprite.getPosition()
@@ -195,6 +198,11 @@ proc updateBullets(state: PState) =
     var newPos = vec2f(currentBulletPos.x + bullet.traj.x,
                       currentBulletPos.y + bullet.traj.y)
     bullet.sprite.setPosition(newPos)
+    if newPos.x <= 0.0 or newPos.x >= getLevelWidth(state.level).float:
+      deleteBullet()
+      echo("Bullet deleted because it went outside level.")
+      continue
+    
     # Check if bullet hit player
     # TODO: Better collision detection?
     if bulletHits(bullet, state.player):
@@ -202,7 +210,7 @@ proc updateBullets(state: PState) =
       # TODO: -10 on screen
       state.player.health.dec(10)
       deleteBullet()
-    
+      continue
 
 proc handleView(state: PState, left: bool, playerSpeed: float) =
   let viewPosX = state.window.convertCoords(vec2i(0, 0), state.view).x
@@ -216,7 +224,11 @@ proc handleView(state: PState, left: bool, playerSpeed: float) =
       state.view.move(vec2f(0-playerSpeed, 0))
   elif (screenW + viewPosX) - playerPosX <= 200 and not left:
     # We are close to the right edge, and moving towards it.
-    state.view.move(vec2f(playerSpeed,0))
+    
+    if getLevelWidth(state.level).float-viewPosX <= 820:
+      #state.view.move(vec2f((getLevelWidth(state.level).float-300)-viewPosX, 0))
+    else:
+      state.view.move(vec2f(playerSpeed,0))
 
 proc handleLegs(player: var TVillain) =
   if player.legTicks >= 3:
@@ -232,14 +244,20 @@ proc action(state: PState, player: var TVillain, keyCode: TKeyCode) =
     playerSpeed = 15.0
   case keyCode
   of keyLeft:
-    player.sprite.setPosition(vec2f(pos.x - playerSpeed, pos.y))
+    let newPos = vec2f(pos.x - playerSpeed, pos.y)
+    if newPos.x < 5.0:
+      return
+    player.sprite.setPosition(newPos)
     player.sprite.setOrigin(vec2f(28, 0))
     player.sprite.setTextureRect(intRect(64, 0, 64, 64))
     player.orientation = left
     handleView(state, true, playerSpeed)
     handleLegs(player)
   of keyRight:
-    player.sprite.setPosition(vec2f(pos.x + playerSpeed, pos.y))
+    let newPos = vec2f(pos.x + playerSpeed, pos.y)
+    if newPos.x < 0.0 or newPos.x > (getLevelWidth(state.level).float-100):
+      return
+    player.sprite.setPosition(newPos)
     player.sprite.setOrigin(vec2f(0, 0))
     player.sprite.setTextureRect(intRect(0, 0, 64, 64))
     player.orientation = right
@@ -363,6 +381,15 @@ when isMainModule:
         case event.key.code
         of keyUp:
           state.player.jump()
+        of keySpace:
+          let plyrsPos = state.player.sprite.getPosition()
+          if state.player.orientation == right:
+            state.addBullet(vec2f(plyrsPos.x+108,plyrsPos.y+32), 
+                            vec2f(15, 0))
+          elif state.player.orientation == left:
+            state.addBullet(vec2f(plyrsPos.x-44,plyrsPos.y+32), 
+                            vec2f(-15, 0))
+          
         of keyZ:
           echo(state.player.sprite.getPosition().x.formatFloat())
           echo(state.window.convertCoords(vec2i(0, 0), state.view).x.formatFloat())
