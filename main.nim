@@ -2,6 +2,14 @@ import csfml, csfml_colors
 import strutils
 
 type
+
+  TLegs = enum
+    CVLegsStill, CVLegs1, CVLegs2,
+    VillLegsStill, VillLegs1, VillLegs2
+  
+  TOrientation = enum
+    Left, Right
+
   TState = object
     window: PRenderWindow
     view: PView
@@ -10,6 +18,7 @@ type
     player: TVillain
     level: TLevel
     texture: PTexture
+    legs: array[TLegs, PSprite]
     
   PState = ref TState
 
@@ -18,6 +27,9 @@ type
     jumping: bool
     yvelocity: float
     beforeJumpY: float
+    currentLeg: TLegs
+    legTicks: int
+    orientation: TOrientation
 
   TTileType = enum
     TileRailing = 0, TileLamp, TileLampTop, 
@@ -66,10 +78,43 @@ proc loadLevel(file: string = "levels/level1.csv"): TLevel =
       yList.add(parseTiles(spec))
     result.tiles.add(yList)
 
+proc newSprite2(texture: PTexture, coord: var TIntRect): PSprite =
+  result = newSprite(texture, coord)
+  result.setScale(vec2f(2,2))
+
+proc loadLegs(state: PState) =
+  var coord = intRect(0, 64*4, 64, 64)
+  state.legs[CVLegsStill] = newSprite2(state.texture, coord)
+  coord.left = 64
+  state.legs[CVLegs1] = newSprite2(state.texture, coord)
+  coord.left = 128
+  state.legs[CVLegs2] = newSprite2(state.texture, coord)
+
+  # Villain legs.
+  coord.top = 64
+  coord.left = 0
+  state.legs[VillLegsStill] = newSprite2(state.texture, coord)
+  coord.left = 64
+  state.legs[VillLegs1] = newSprite2(state.texture, coord)
+  coord.left = 128
+  state.legs[VillLegs2] = newSprite2(state.texture, coord)
+
+proc getNextLeg(leg: TLegs): TLegs =
+  ## Returns the next leg in sequence
+  case leg
+  of CVLegs2:
+    return CVLegsStill
+  of VillLegs2:
+    return VillLegsStill
+  else:
+    return TLegs(ord(leg)+1)
+
 proc initVillain(sprite: PSprite): TVillain =
   result.sprite = sprite
   result.sprite.setPosition(vec2f(0.0, 388.0))
   result.sprite.setScale(vec2f(2,2))
+  result.currentLeg = VillLegsStill
+  result.orientation = right
 
 proc update(player: var TVillain) =
   # This is called every 1 tick.
@@ -85,33 +130,47 @@ proc update(player: var TVillain) =
       player.yvelocity = 0
       player.jumping = false
 
-proc handleView(state: PState, left: bool) =
+proc handleView(state: PState, left: bool, playerSpeed: float) =
   let viewPosX = state.window.convertCoords(vec2i(0, 0), state.view).x
   let playerPosX = state.player.sprite.getPosition().x
   if playerPosX - viewPosX <= 50.0 and left:
     # We are close to the left side of the camera, and moving towards it.
     # We should move it.
-    if viewPosX == 0.0 or viewPosX - 8.0 <= 0.0:
+    if viewPosX == 0.0 or viewPosX - playerSpeed <= 0.0:
       state.view.move(vec2f(0-viewPosX, 0)) # Move it to 0,0
     else:
-      state.view.move(vec2f(-8.0, 0))
+      state.view.move(vec2f(0-playerSpeed, 0))
   elif (screenW + viewPosX) - playerPosX <= 200 and not left:
-    echo(formatFloat((screenW + viewPosX) - playerPosX))
     # We are close to the right edge, and moving towards it.
-    state.view.move(vec2f(8.0,0))
+    state.view.move(vec2f(playerSpeed,0))
+
+proc handleLegs(player: var TVillain) =
+  if player.legTicks >= 3:
+    player.currentLeg = getNextLeg(player.currentLeg)
+    player.legTicks = 0
+  player.legTicks.inc
 
 proc action(state: PState, player: var TVillain, keyCode: TKeyCode) =
   # This is called when a key is pressed every 1 tick.
   let pos = player.sprite.getPosition()
+  var playerSpeed = 6.0
+  if player.jumping:
+    playerSpeed = 15.0
   case keyCode
   of keyLeft:
-    player.sprite.setPosition(vec2f(pos.x - 8, pos.y))
+    player.sprite.setPosition(vec2f(pos.x - playerSpeed, pos.y))
+    player.sprite.setOrigin(vec2f(28, 0))
     player.sprite.setTextureRect(intRect(64, 0, 64, 64))
-    handleView(state, true)
+    player.orientation = left
+    handleView(state, true, playerSpeed)
+    handleLegs(player)
   of keyRight:
-    player.sprite.setPosition(vec2f(pos.x + 8, pos.y))
+    player.sprite.setPosition(vec2f(pos.x + playerSpeed, pos.y))
+    player.sprite.setOrigin(vec2f(0, 0))
     player.sprite.setTextureRect(intRect(0, 0, 64, 64))
-    handleView(state, false)
+    player.orientation = right
+    handleView(state, false, playerSpeed)
+    handleLegs(player)
   else:
     nil
 
@@ -153,12 +212,24 @@ proc draw(state: PState, level: TLevel, behind: bool) =
       inc(xCoord, 128)
     xCoord = 0
     inc(yCoord, 128)
+
+proc draw(state: PState, player: var TVillain) =
+  # Draw legs.
+  var plyrPos = player.sprite.getPosition()
   
+  state.legs[player.currentLeg].setPosition(plyrPos)
+  state.window.draw state.legs[player.currentLeg]
+  
+
+  state.window.draw player.sprite
+  
+  
+
 proc draw(state: PState) =
 
   state.draw(state.level, true)
 
-  state.window.draw state.player.sprite
+  state.draw state.player
 
   state.draw(state.level, false)
 
@@ -183,6 +254,8 @@ when isMainModule:
   state.texture = newTexture("textures.png", nil)
   
   state.player = initVillain(newSprite(state.texture, villainRect))
+  
+  state.loadLegs()
   
   state.window.set_framerate_limit 60
 
