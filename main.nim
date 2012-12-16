@@ -19,6 +19,8 @@ type
     level: TLevel
     texture: PTexture
     legs: array[TLegs, PSprite]
+    bullets: seq[TBullet]
+    showBounds: bool
     
   PState = ref TState
 
@@ -30,6 +32,11 @@ type
     currentLeg: TLegs
     legTicks: int
     orientation: TOrientation
+    health: int
+
+  TBullet = object
+    sprite: PSprite
+    traj: TVector2f
 
   TTileType = enum
     TileRailing = 0, TileLamp, TileLampTop, 
@@ -99,6 +106,17 @@ proc loadLegs(state: PState) =
   coord.left = 128
   state.legs[VillLegs2] = newSprite2(state.texture, coord)
 
+proc addBullet(state: PState, u: TVector2f, traj: TVector2f) =
+  var bullet: TBullet
+  var coord = intRect(64*3, 64, 64, 64)
+  if traj.x < 0:
+    coord.left = 64*4
+  
+  bullet.sprite = newSprite2(state.texture, coord)
+  bullet.sprite.setPosition(u)
+  bullet.traj = traj
+  state.bullets.add(bullet)
+
 proc getNextLeg(leg: TLegs): TLegs =
   ## Returns the next leg in sequence
   case leg
@@ -115,6 +133,7 @@ proc initVillain(sprite: PSprite): TVillain =
   result.sprite.setScale(vec2f(2,2))
   result.currentLeg = VillLegsStill
   result.orientation = right
+  result.health = 100
 
 proc update(player: var TVillain) =
   # This is called every 1 tick.
@@ -129,6 +148,61 @@ proc update(player: var TVillain) =
       player.beforeJumpY = -1
       player.yvelocity = 0
       player.jumping = false
+
+
+proc floatRect2(x, y, w, h: float): TFloatRect {.inline.} =
+  return floatRect(x, y, w*2, h*2)
+
+proc getBoundBox(player: TVillain): seq[TFloatRect] =
+  result = @[]
+  let pos = player.sprite.getPosition()
+  # Body
+  if player.orientation == right:
+    # 14x33
+    result.add(floatRect2(pos.x+22, pos.y+14, 14, 33+22)) # +22 is legs
+  elif player.orientation == left:
+    result.add(floatRect2(pos.x+49-28, pos.y+14, 14, 33+22))
+  # Arm
+  if player.orientation == right:
+    # 20x5
+    result.add(floatRect2(pos.x+48, pos.y+38, 20, 5))
+  elif player.orientation == left:
+    # 20x5
+    result.add(floatRect2(pos.x+10-28, pos.y+38, 20, 5))
+
+proc getBoundBox(bullet: TBullet): TFloatRect =
+  let bpos = bullet.sprite.getPosition()
+  return floatRect(bpos.x, bpos.y, 16.0, 6.0)
+
+proc bulletHits(bullet: TBullet, player: TVillain): bool =
+  var bCorrectRect = getBoundBox(bullet)
+  var pCorrectRects = getBoundBox(player)
+  var intersection: TFloatRect
+  for i in 0..pCorrectRects.len-1:
+    result = result or intersects(addr bCorrectRect, addr pCorrectRects[i], addr intersection)
+  
+proc updateBullets(state: PState) =
+  # every 1 tick
+  template deleteBullet() {.immediate.} =
+    bullet.sprite.destroy()
+    state.bullets.delete(i-removed)
+    inc(removed)
+    
+  var removed = 0
+  for i in 0..state.bullets.len-1:
+    let bullet = state.bullets[i-removed]
+    let currentBulletPos = bullet.sprite.getPosition()
+    var newPos = vec2f(currentBulletPos.x + bullet.traj.x,
+                      currentBulletPos.y + bullet.traj.y)
+    bullet.sprite.setPosition(newPos)
+    # Check if bullet hit player
+    # TODO: Better collision detection?
+    if bulletHits(bullet, state.player):
+      echo("YOU JUST GOT HIT BRO.")
+      # TODO: -10 on screen
+      state.player.health.dec(10)
+      deleteBullet()
+    
 
 proc handleView(state: PState, left: bool, playerSpeed: float) =
   let viewPosX = state.window.convertCoords(vec2i(0, 0), state.view).x
@@ -219,24 +293,41 @@ proc draw(state: PState, player: var TVillain) =
   
   state.legs[player.currentLeg].setPosition(plyrPos)
   state.window.draw state.legs[player.currentLeg]
-  
 
+  # Player
   state.window.draw player.sprite
-  
-  
+
+  # Bounding box.
+  if state.showBounds:
+    for box in getBoundBox(player):
+      var rectShape = newRectangleShape()
+      rectShape.setPosition(vec2f(box.left, box.top))
+      rectShape.setSize(vec2f(box.width, box.height))
+      rectShape.setFillColor(transparent)
+      rectShape.setOutlineColor(magenta)
+      rectShape.setOutlineThickness(1.0)
+      state.window.draw rectShape
+      rectShape.destroy()
+    
+proc drawBullets(state: PState) =
+  for bullet in state.bullets:
+    state.window.draw bullet.sprite
 
 proc draw(state: PState) =
 
   state.draw(state.level, true)
 
+  
   state.draw state.player
-
+  state.drawBullets()
+  
   state.draw(state.level, false)
 
 when isMainModule:
 
   var state: PState
   new(state)
+  state.bullets = @[]
   state.window = newRenderWindow(videoMode(screenW, ScreenH, 32), "LD25", sfTitlebar or sfClose)
   state.level = loadLevel()
   
@@ -275,6 +366,10 @@ when isMainModule:
         of keyZ:
           echo(state.player.sprite.getPosition().x.formatFloat())
           echo(state.window.convertCoords(vec2i(0, 0), state.view).x.formatFloat())
+        of keyP:
+          state.addBullet(vec2f(400, 450), vec2f(-3, 0))
+        of keyB:
+          state.showBounds = not state.showBounds
         else: nil
         
       of evtKeyReleased:
@@ -306,6 +401,7 @@ when isMainModule:
       tickClock.restart()
       # 1 tick has passed.
       state.player.update()
+      state.updateBullets()
       # Keyboard
       for keyPressed in keysPressed:
         state.action(state.player, keyPressed)
